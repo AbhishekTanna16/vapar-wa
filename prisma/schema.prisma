@@ -1,0 +1,101 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Contact {
+  id          String    @id @default(cuid())
+  phone       String    @unique
+  name        String?
+  email       String?
+  tags        String[]
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  messages    Message[]
+  orders      Order[]
+}
+
+model Message {
+  id          String    @id @default(cuid())
+  waMessageId String?   @unique
+  contactId   String
+  contact     Contact   @relation(fields: [contactId], references: [id])
+  direction   Direction
+  type        String    @default("text")
+  body        String
+  status      String    @default("sent")
+  createdAt   DateTime  @default(now())
+}
+
+model FlowRule {
+  id        String   @id @default(cuid())
+  trigger   String
+  matchType MatchType @default(EXACT)
+  response  String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model Campaign {
+  id          String   @id @default(cuid())
+  name        String
+  message     String
+  status      CampaignStatus @default(DRAFT)
+  recipients  String[]
+  sentCount   Int      @default(0)
+  failedCount Int      @default(0)
+  scheduledAt DateTime?
+  createdAt   DateTime @default(now())
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  price       Float
+  imageUrl    String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  orders      Order[]
+}
+
+model Order {
+  id        String      @id @default(cuid())
+  contactId String
+  contact   Contact     @relation(fields: [contactId], references: [id])
+  productId String
+  product   Product     @relation(fields: [productId], references: [id])
+  quantity  Int         @default(1)
+  status    OrderStatus @default(PENDING)
+  createdAt DateTime    @default(now())
+}
+
+enum Direction {
+  INBOUND
+  OUTBOUND
+}
+
+enum MatchType {
+  EXACT
+  CONTAINS
+  STARTS_WITH
+}
+
+enum CampaignStatus {
+  DRAFT
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
