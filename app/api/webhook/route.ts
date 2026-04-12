@@ -1,81 +1,102 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
-import { sendText, markAsRead } from '@/lib/whatsapp'
+import { prisma } from '@/lib/db'
+import { sendText, markAsRead, saveOutbound } from '@/lib/whatsapp'
 
-// Meta calls GET to verify the webhook
+// ── GET — Meta verification handshake ──────────────────────────────
 export async function GET(req: NextRequest) {
-  const mode = req.nextUrl.searchParams.get('hub.mode')
-  const token = req.nextUrl.searchParams.get('hub.verify_token')
+  const mode      = req.nextUrl.searchParams.get('hub.mode')
+  const token     = req.nextUrl.searchParams.get('hub.verify_token')
   const challenge = req.nextUrl.searchParams.get('hub.challenge')
 
   if (mode === 'subscribe' && token === process.env.WEBHOOK_VERIFY_TOKEN) {
-    console.log('✅ Webhook verified')
+    console.log('✅ Webhook verified by Meta')
     return new NextResponse(challenge, { status: 200 })
   }
   return new NextResponse('Forbidden', { status: 403 })
 }
 
-// Meta calls POST for every incoming message/status
+// ── POST — incoming messages from Meta ─────────────────────────────
 export async function POST(req: NextRequest) {
-  const body = await req.json()
+  try {
+    const body = await req.json()
 
-  const entry = body.entry?.[0]
-  const change = entry?.changes?.[0]?.value
-  const message = change?.messages?.[0]
-  const contact = change?.contacts?.[0]
+    // Meta sends a test ping with no messages — just acknowledge
+    if (body.object !== 'whatsapp_business_account') {
+      return new NextResponse('OK', { status: 200 })
+    }
 
-  if (!message) return new NextResponse('OK', { status: 200 })
+    const entry   = body.entry?.[0]
+    const change  = entry?.changes?.[0]?.value
+    const message = change?.messages?.[0]
+    const contact = change?.contacts?.[0]
 
-  const phone = message.from
-  const name = contact?.profile?.name ?? null
-  const messageId = message.id
-  const text = message.text?.body ?? ''
+    // Handle status updates (delivered, read) — just acknowledge
+    if (!message && change?.statuses) {
+      return new NextResponse('OK', { status: 200 })
+    }
 
-  // 1. Upsert contact
-  const dbContact = await prisma.contact.upsert({
-    where: { phone },
-    update: { name: name ?? undefined },
-    create: { phone, name },
-  })
+    if (!message) return new NextResponse('OK', { status: 200 })
 
-  // 2. Save incoming message
-  await prisma.message.create({
-    data: {
-      waMessageId: messageId,
-      contactId: dbContact.id,
-      direction: 'INBOUND',
-      type: message.type,
-      body: text,
-      status: 'received',
-    },
-  })
+    const phone     = message.from
+    const waId      = message.id
+    const name      = contact?.profile?.name ?? null
+    const msgType   = message.type
+    const text      = message.text?.body ?? ''
 
-  // 3. Mark as read
-  await markAsRead(messageId)
+    console.log(`📨 Incoming from ${phone}: ${text}`)
 
-  // 4. Run through flow rules
-  const reply = await getAutoReply(text)
-  if (reply) {
-    await sendText(phone, reply)
+    // 1. Upsert contact
+    const dbContact = await prisma.contact.upsert({
+      where:  { phone },
+      update: { name: name ?? undefined },
+      create: { phone, name },
+    })
+
+    // 2. Save inbound message (avoid duplicate processing)
+    const existing = await prisma.message.findUnique({
+      where: { waMessageId: waId }
+    })
+    if (existing) return new NextResponse('OK', { status: 200 })
+
     await prisma.message.create({
       data: {
-        contactId: dbContact.id,
-        direction: 'OUTBOUND',
-        body: reply,
-        status: 'sent',
-      },
+        waMessageId: waId,
+        contactId:   dbContact.id,
+        direction:   'INBOUND',
+        type:        msgType,
+        body:        text || `[${msgType}]`,
+        status:      'received',
+      }
     })
-  }
 
-  return new NextResponse('OK', { status: 200 })
+    // 3. Mark as read
+    await markAsRead(waId)
+
+    // 4. Run flow engine — find matching auto-reply
+    if (text) {
+      const reply = await getAutoReply(text)
+      if (reply) {
+        await sendText(phone, reply)
+        await saveOutbound(dbContact.id, reply)
+        console.log(`✅ Auto-replied to ${phone}: ${reply}`)
+      }
+    }
+
+    return new NextResponse('OK', { status: 200 })
+  } catch (error) {
+    console.error('Webhook error:', error)
+    // Always return 200 to Meta — otherwise Meta retries endlessly
+    return new NextResponse('OK', { status: 200 })
+  }
 }
 
-// Flow engine — matches incoming text to rules in the DB
+// ── Flow engine ─────────────────────────────────────────────────────
 async function getAutoReply(text: string): Promise<string | null> {
   const normalised = text.trim().toLowerCase()
 
   const rules = await prisma.flowRule.findMany({
-    where: { isActive: true },
+    where:   { isActive: true },
+    orderBy: { createdAt: 'asc' },
   })
 
   for (const rule of rules) {
@@ -89,5 +110,5 @@ async function getAutoReply(text: string): Promise<string | null> {
     if (matched) return rule.response
   }
 
-  return null // no match → no reply
+  return null
 }
