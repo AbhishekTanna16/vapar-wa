@@ -76,3 +76,102 @@ export async function saveOutbound(contactId: string, body: string, waMessageId?
     }
   })
 }
+export async function sendListMenu(to: string) {
+  const res = await api.post(`/${PHONE_ID}/messages`, {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      header: {
+        type: 'text',
+        text: '🌟 Welcome to WeSupply!'
+      },
+      body: {
+        text: 'We provide premium Netsurf products in Surat.\n\nPlease select an option below:'
+      },
+      footer: {
+        text: 'Powered by WeSupply.store'
+      },
+      action: {
+        button: 'View Options 📋',
+        sections: [
+          {
+            title: '🛍️ Shopping',
+            rows: [
+              {
+                id: 'view_products',
+                title: 'View Products',
+                description: 'Browse our product catalog'
+              },
+              {
+                id: 'check_price',
+                title: 'Check Price',
+                description: 'Get latest pricing'
+              },
+              {
+                id: 'place_order',
+                title: 'Place Order',
+                description: 'Order your products'
+              }
+            ]
+          },
+          {
+            title: '📦 Orders',
+            rows: [
+              {
+                id: 'track_order',
+                title: 'Track My Order',
+                description: 'Check order status'
+              },
+              {
+                id: 'order_history',
+                title: 'Order History',
+                description: 'View past orders'
+              }
+            ]
+          },
+          {
+            title: '💬 Support',
+            rows: [
+              {
+                id: 'contact_us',
+                title: 'Contact Us',
+                description: 'Talk to our team'
+              }
+            ]
+          }
+        ]
+      }
+    }
+  })
+  return res.data
+}
+
+export async function sendButtonMenu(
+  to: string,
+  bodyText: string,
+  buttons: { id: string, title: string }[]
+) {
+  const res = await api.post(`/${PHONE_ID}/messages`, {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      body: {
+        text: bodyText
+      },
+      action: {
+        buttons: buttons.map(btn => ({
+          type: 'reply',
+          reply: {
+            id: btn.id,
+            title: btn.title
+          }
+        }))
+      }
+    }
+  })
+  return res.data
+}
